@@ -118,58 +118,83 @@ def admin_panel():
 def chat_room():
     st.title("💬 Strategy Command Center")
     
-    # Inisialisasi API Gemini
+    # 1. Verifikasi API Key
     api_key = st.secrets.get("GEMINI_API_KEY")
     if not api_key:
-        st.error("API Key Hilang! Cek Streamlit Secrets.")
+        st.error("API Key tidak ditemukan di Secrets!")
         return
 
     genai.configure(api_key=api_key)
-    # Memanggil Model Gemini 3 Pro Preview
-    model = genai.GenerativeModel(
-        model_name="gemini-3-pro-preview",
-        system_instruction=SYSTEM_INSTRUCTION
-    )
+    
+    # 2. Inisialisasi Model
+    try:
+        # Gunakan gemini-1.5-pro jika gemini-3-pro-preview masih tidak stabil (Error 500)
+        model = genai.GenerativeModel(
+            model_name="gemini-1.5-pro", 
+            system_instruction=SYSTEM_INSTRUCTION
+        )
+    except Exception as e:
+        st.error(f"Gagal inisialisasi model: {e}")
+        return
 
-    # Menampilkan Pesan
+    # 3. Tampilkan Riwayat Pesan
     for i, msg in enumerate(st.session_state.messages):
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
-            # Baris tombol Copy & Delete
             col_a, col_b, _ = st.columns([0.05, 0.05, 0.9])
             if col_a.button("📋", key=f"cp_{i}"):
-                st.code(msg["content"]) # Code block memberikan tombol copy otomatis
+                st.code(msg["content"])
             if col_b.button("🗑️", key=f"dl_{i}"):
                 st.session_state.messages.pop(i)
                 st.rerun()
 
-    # Chat Input
+    # 4. Input Chat & Logika Response
     if prompt := st.chat_input("Tanyakan strategi kemenangan..."):
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
             st.markdown(prompt)
         
         with st.chat_message("assistant"):
+            # INISIALISASI VARIABEL AGAR TIDAK UNBOUND
+            full_res_text = "" 
+            
             try:
-                res = model.generate_content(prompt)
-                # Parsing respons JSON dari AI
-                data = json.loads(res.text)
-                txt = data.get("text_response", "Gagal memproses narasi.")
-                status = data.get("current_status", "SAFE")
+                # Memanggil API Google
+                response = model.generate_content(prompt)
                 
-                # Tampilkan teks
-                st.markdown(txt)
-                
-                # Jika Kritis, tampilkan alert merah
-                if status == "CRITICAL":
-                    st.error("🚨 PERINGATAN: Wilayah/Kondisi ini terdeteksi KRITIS.")
-                
-                st.session_state.messages.append({"role": "assistant", "content": txt})
-            except Exception as e:
-                # Fallback jika AI tidak menjawab dalam JSON yang valid
-                st.markdown(res.text)
-                st.session_state.messages.append({"role": "assistant", "content": res.text})
+                # Pastikan response memiliki konten
+                if response and response.text:
+                    full_res_text = response.text
+                    
+                    # Coba parsing JSON sesuai instruksi sistem
+                    try:
+                        data = json.loads(full_res_text)
+                        txt_to_show = data.get("text_response", full_res_text)
+                        status = data.get("current_status", "SAFE")
+                        
+                        st.markdown(txt_to_show)
+                        if status == "CRITICAL":
+                            st.error("🚨 PERINGATAN: Kondisi Terdeteksi KRITIS!")
+                        
+                        st.session_state.messages.append({"role": "assistant", "content": txt_to_show})
+                    
+                    except json.JSONDecodeError:
+                        # Jika AI tidak menjawab dalam format JSON, tampilkan teks mentah
+                        st.markdown(full_res_text)
+                        st.session_state.messages.append({"role": "assistant", "content": full_res_text})
+                else:
+                    st.warning("AI memberikan respons kosong. Coba tanya lagi.")
 
+            except Exception as e:
+                # Menampilkan error asli tanpa menyebabkan UnboundLocalError
+                error_msg = f"Terjadi gangguan pada layanan Google API: {str(e)}"
+                st.error(error_msg)
+                # Opsional: Catat error ke log untuk admin
+                print(f"DEBUG ERROR: {e}") 
+        
+        # Rerun agar chat history terupdate dengan benar
+        st.rerun()
+      
 # --- 7. NAVIGASI UTAMA ---
 if not st.session_state.authenticated:
     login_ui()
